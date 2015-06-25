@@ -1,0 +1,212 @@
+<html>
+  
+  <head>
+    <style type="text/css">
+      .fail {
+      color:red;
+      }
+      .success {
+      color: blue;
+      }
+    </style>
+    
+    <body>
+      <label for="repose_endpoint">Repose Endpoint</label>
+      <input type="text" name="repose_endpoint" id="repose_endpoint" placeholder="Enter Repose Endpoint">
+      <input type="text" name="jolokia_endpoint" id="jolokia_endpoint" placeholder="Enter Jolokia Endpoint">
+      <button id="search" name="search">Populate graph</button>
+      <ul id="validators"></ul>
+      <div id="cluster_content"></div>
+      <table>
+        <thead>
+          <tr>
+            <th>Successful Requests</th>
+            <th>Failed Requests</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              <ul id="success_paths"></ul</td>
+                <td>
+                  <ul id="fail_paths"></ul</td>
+          </tr>
+      </table>
+      <table>
+        <thead>
+          <tr>
+            <th>Possible Successful Requests =&gt;
+              <span id="success_path_count"></span>
+            </th>
+            <th>Possible Failed Requests =&gt;
+              <span id="failed_path_count"></span>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              <ul id="possible_success_paths"></ul</td>
+                <td>
+                  <ul id="possible_fail_paths"></ul</td>
+          </tr>
+      </table>
+      <script src="http://mdaines.github.io/viz.js/viz.js"></script>
+      <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.11.0/jquery.min.js"></script>
+      <script src="/socket.io/socket.io.js"></script>
+      <script>
+        var positivePaths = [];
+        var negativePaths = [];
+        var socket = io.connect('http://localhost:8080');
+        socket.on('news', function (data) {
+          socket.emit('my other event', { my: 'data' });
+        });
+        socket.on('roles', function(data){
+          if(!data.repose){
+            $('#repose_endpoint_error').val() = 'Could not load repose endpoint';
+          } else {
+            $('#validators').empty();
+            for(var i = 0, max = data.jolokia.length; i < max; i ++ ){
+              $('#validators').append('<li>' + data.jolokia[i] + '</li>');
+              socket.emit('role', {jolokiaEndpoint: $('#jolokia_endpoint').val(), role: data.jolokia[i]});
+            }
+          }
+        });
+        socket.on('graph', function(data){
+          //create content
+          console.log(data);
+          outputXML = data.xmlOutput;
+          var div = document.createElement('div');
+          div.id = data.id + "-content";
+          if(document.getElementById(data.id + "-content") === null){
+             document.getElementById('cluster_content').appendChild(div);
+          }
+          //create a new script tag
+          var jsGraphviz = document.createElement('script');
+          jsGraphviz.type = "text/vnd.graphviz";
+          jsGraphviz.id = data.id;
+          var first = document.getElementsByTagName('script')[0];
+          if(document.getElementById(data.id) === null){
+             first.parentNode.insertBefore(jsGraphviz, first);                    
+             jsGraphviz.innerHTML = data.dotOutput;
+             $('#' + div.id).append(render(data.id, "svg")); //this renders a role          
+          } else {
+             document.getElementById(data.id).innerHTML = data.dotOutput;
+             $('#' + div.id).html(render(data.id, "svg")); //this renders a role          
+          }
+      
+          //calculate total paths here.
+          var xmlDoc = $.parseXML(data.xmlOutput);
+          var $xml = $(xmlDoc);
+          var start = $xml.find('step[type="START"]');
+          //pass in starting point, full doc, positive path list, negative path list, and string representation of path
+          traverse(start, $xml, positivePaths, negativePaths, "S0");
+          $('#success_path_count').html(positivePaths.length);
+          $('#failed_path_count').html(negativePaths.length);
+          for(var i = 0, max = positivePaths.length; i < max; i ++ ){
+            $('#possible_success_paths').append('<li>' + positivePaths[i] + '</li>');
+          }
+          for(var i = 0, max = negativePaths.length; i < max; i ++ ){
+            $('#possible_fail_paths').append('<li>' + negativePaths[i] + '</li>');
+          }
+        });
+        socket.on('path', function(data){
+          var steps = JSON.parse(data.path.match(/.*INFO  api-coverage-logger - (.*)$/)[1]).steps;
+          for(var i = 0, max = steps.length; i < max; i ++ ){
+            //because we don't highlight failure cases, this would break.  So check
+            var nodeInGraph = $("#cluster_content title").filter(function() { return ($(this).text() === steps[i]) });
+            if(nodeInGraph[0] !== undefined){
+              //get step. color it blue
+              var ellipse = nodeInGraph[0].nextElementSibling;
+              ellipse.setAttribute('fill', 'lightblue');
+            //if i+1 == max, don't do anything
+            //get step[i] to step[i+1]. color it blue. add to width
+              if(i+1 < max) {
+                var pathInGraph = $("#cluster_content title").filter(function() { return ($(this).text() === steps[i] + '->' + steps[i+1]) });
+                console.log('path',pathInGraph);
+                if(pathInGraph[0] !== undefined){
+                  //get step. color it blue
+                  var path = pathInGraph[0].nextElementSibling;
+                  path.setAttribute('stroke', 'purple');
+                  console.log('stroke',path.getAttribute('stroke-width'));
+                  if(path.getAttribute('stroke-width') == null){
+        console.log('stroke width is empty');
+                    path.setAttribute('stroke-width', '1');
+                  } else {
+                    var width = parseInt(path.getAttribute('stroke-width')) + 1
+        console.log('stroke width', width);
+                    path.setAttribute('stroke-width', width + "");
+                  }
+                }
+              } else {
+          $('#success_paths').append('<li><span class="success">' + data.path.match(/.*INFO  api-coverage-logger - (.*)$/)[1] + '</span></li>');
+              }
+            } else {
+          $('#fail_paths').append('<li><span class="fail">' + data.path.match(/.*INFO  api-coverage-logger - (.*)$/)[1] + '</span></li>');
+            }
+          }
+        });
+       
+      
+        $(function(){
+          $('#search').on('click', function(){
+            console.log($('#repose_endpoint').val(), $('#jolokia_endpoint').val());
+            socket.emit('reposeCheck', $('#repose_endpoint').val(), $('#jolokia_endpoint').val());
+          });
+      
+        });
+        function render(id, format) {
+          var result;
+          try {
+            return  Viz(src(id), format);
+          } catch(e) {
+            return inspect(e.toString());
+          }
+        }
+      
+      function inspect(s) {
+              return "<pre>" + s.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;") + "</pre>"
+            }  
+      
+            function src(id) {
+              return document.getElementById(id).innerHTML;
+            }
+      
+      function traverse(node, xmlDoc, positivePathList, negativePathList, pathList){
+          //check node type
+          var nodeType = node.attr('type'); console.log('node type: ', nodeType);
+          //check if the type is one of the failed nodes (leafs)
+          if(failedNodes.indexOf(nodeType) > -1){
+            //it is!  add to negativePathList
+            negativePathList.push(pathList + ' (' + nodeType + ' and did not match ' + node.attr('notMatch') + ')'); 
+          } else if (positiveNodes.indexOf(nodeType) > -1){
+            //we are at the end!
+            positivePathList.push(pathList); 
+          } else {
+            // get next children, if exist  
+            var childNodes = node.attr('next'); 
+            if(childNodes !== undefined){
+              //we got kids
+              childNodes = childNodes.split(' ');
+              for(var i = 0, max = childNodes.length; i < max; i ++ ){ console.log('traverse with: ', childNodes[i]);
+                traverse(xmlDoc.find('step[id="' + childNodes[i] + '"]'), xmlDoc, positivePathList, negativePathList, pathList + "->" + childNodes[i]); 
+              } 
+            } else {
+              //no kids but also no end.  We assume this is a failed state
+              negativePathList.push(pathList);
+            }
+          }
+      }
+      
+      var failedNodes = ['METHOD_FAIL', 'URL_FAIL','CONTENT_TYPE_FAIL']
+      var positiveNodes = ['ACCEPT']
+      
+      if ( typeof String.prototype.startsWith != 'function' ) {
+              String.prototype.startsWith = function( str ) {
+                return str.length > 0 && this.substring( 0, str.length ) === str;
+              }
+            };
+      </script>
+    </body>
+
+</html>
