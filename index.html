@@ -130,11 +130,9 @@
                   path.setAttribute('stroke', 'purple');
                   console.log('stroke',path.getAttribute('stroke-width'));
                   if(path.getAttribute('stroke-width') == null){
-        console.log('stroke width is empty');
                     path.setAttribute('stroke-width', '1');
                   } else {
                     var width = parseInt(path.getAttribute('stroke-width')) + 1
-        console.log('stroke width', width);
                     path.setAttribute('stroke-width', width + "");
                   }
                 }
